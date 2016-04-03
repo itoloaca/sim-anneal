@@ -83,58 +83,9 @@ class Tiles:
 		energy[3] = self.getEnergyHMargin(tileColors, tileBelow)
 		return sum(energy)
 
-	def energyAlt(self):
-		energy = 0;
-		for i in range(1,self.height - 1):
-			for j in range(1,self.width - 1):
-				energy += self.getEnergyAround(Tile(i,j))
-
-		for j in range(0,self.width - 1):
-			tileColors = self.getTileColors(Tile(0,j))
-			tileColorsNext = self.getTileColors(Tile(0,j+1))
-			energy += 2 * self.getEnergyVMargin(tileColors, tileColorsNext)
-
-		for j in range(0,self.width - 1):
-			tileColors = self.getTileColors(Tile(self.height-1,j))
-			tileColorsNext = self.getTileColors(Tile(self.height-1,j+1))
-			energy += 2 * self.getEnergyVMargin(tileColors, tileColorsNext)
-
-		for i in range(0,self.height-1):
-			tileColors = self.getTileColors(Tile(i,0))
-			tileColorsNext = self.getTileColors(Tile(i+1,0))
-			energy += 2 * self.getEnergyHMargin(tileColors, tileColorsNext)
-
-		for i in range(0,self.height - 1):
-			tileColors = self.getTileColors(Tile(i,self.width - 1))
-			tileColorsNext = self.getTileColors(Tile(i+1,self.width - 1))
-			energy += 2 * self.getEnergyHMargin(tileColors, tileColorsNext)
-
-		for j in range(1,self.width - 1):
-			tileColors = self.getTileColors(Tile(0,j))
-			tileColorsNext = self.getTileColors(Tile(1,j))
-			energy += self.getEnergyHMargin(tileColors, tileColorsNext)
-		for j in range(1,self.width - 1):
-			tileColors = self.getTileColors(Tile(self.height-2,j))
-			tileColorsNext = self.getTileColors(Tile(self.height-1,j))
-			energy += self.getEnergyHMargin(tileColors, tileColorsNext)
-
-		for i in range(1,self.height-1):
-			tileColors = self.getTileColors(Tile(i,0))
-			tileColorsNext = self.getTileColors(Tile(i,1))
-			energy += self.getEnergyVMargin(tileColors, tileColorsNext)
-
-		for i in range(1,self.height-1):
-			tileColors = self.getTileColors(Tile(i,self.width - 2))
-			tileColorsNext = self.getTileColors(Tile(i,self.width - 1))
-			energy += self.getEnergyVMargin(tileColors, tileColorsNext)
-
-		return energy / 2.0
-
-
-
 	def deltaEnergy(self, tile1, tile2):
 		if (tile1 == tile2):
-			return
+			return 0
 		if (tile1.x > tile2.x or tile1.y > tile2.y):
 			tile1, tile2 = tile2, tile1			
 		inCol =  (tile1.y == tile2.y and tile1.x + 1 == tile2.x)
@@ -167,7 +118,52 @@ class Tiles:
 		
 		return sumEnergyAfter - sumEnergyBefore
 
+	def permutationProposal(self):
+		x1 = np.random.randint(1, self.height - 1)
+		y1 = np.random.randint(1, self.width - 1)
+		x2 = np.random.randint(1, self.height - 1)
+		y2 = np.random.randint(1, self.width - 1)
+		return [Tile(x1, y1), Tile(x2, y2)]
+
+class Annealing:
+	def __init__(self, tiles):
+		self.tiles = tiles
+		self.energy = tiles.energy()
+		self.bestEnergy = tiles.energy()
+		self.bestPermutation = tiles.permutation
+	def step(self, temperature):
+		[t1, t2] = tiles.permutationProposal()
+		delta = tiles.deltaEnergy(t1, t2)
+		if (delta <= 0):
+			self.tiles.swap(t1, t2)
+			self.energy += delta
+		else:
+			pAccept = np.exp(- delta / temperature)
+			if (np.random.rand() <= pAccept):
+				self.tiles.swap(t1, t2)
+				self.energy += delta
+
+	def annealing(self, startExp = 8, endExp = -1, numSteps = 3*10**6):
+		temperature = np.logspace(startExp, endExp, numSteps)
+		for indexTuple, tempVal in np.ndenumerate(temperature):
+			index = indexTuple[0]
+			self.step(tempVal)
+			if (self.energy < self.bestEnergy):
+				self.bestPermutation = self.tiles.permutation
+				print('pAccept = ' + str(100 * np.exp((self.energy - self.bestEnergy)/tempVal)))
+				self.bestEnergy = self.energy
+				print(str(self.bestEnergy) + ' at t = ' + str(tempVal) + ' %done = ' + str(100*index/float(temperature.size)))
+
+			if index % 10**6 == 0:
+				print('Index = ' + str(index))
+				print(self.energy - self.tiles.energy())
+
+
+
+## Setup
+
 tiles = Tiles(shuffledTiles, permutation, height, width)
-#tiles.swap(Tile(0,0), Tile(17,0))
-#tiles.swap(Tile(0,0), Tile(0, 11))
-#tiles.display()
+anneal = Annealing(tiles)
+
+#anneal.tiles.display()
+print(anneal.bestEnergy)
