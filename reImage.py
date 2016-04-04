@@ -3,16 +3,31 @@ import numpy as np
 import pprint as pp
 from matplotlib import pyplot as plt
 from collections import namedtuple
+import scipy.misc as misc
+from colormath.color_objects import LabColor, sRGBColor
+from colormath.color_conversions import convert_color
 
 shuffledImageEasy = sio.loadmat('shuffledImageEasy.mat')
 
-RGBtilesShuffled = shuffledImageEasy['RGBtilesShuffled']
-RGBrearranged = shuffledImageEasy['RGBrearranged']
+#original = misc.imread('actualPic.jpg').astype(np.float64)
+originalMat = sio.loadmat('reconstructed.mat')
+original = originalMat['reconstructed'].astype(np.float64)
 
-shuffledTiles = RGBtilesShuffled.reshape(25, 25, 3, 18, 12).astype(np.int32)
+RGBtilesShuffled = shuffledImageEasy['RGBtilesShuffled']
+RGBrearranged = shuffledImageEasy['RGBrearranged'].astype(np.float64)
+
+shuffledTiles = RGBtilesShuffled.reshape(25, 25, 3, 18, 12).astype(np.float64)
 
 height = 18
 width = 12
+
+originalTiles = np.copy(shuffledTiles)
+originalTiles.fill(0)
+
+for i in range(0,height):
+	for j in range(0,width):
+		originalTiles[:,:,:,i,j] = original[25*i:25*(i+1),25*j:25*(j+1),:]	
+
 
 Tile = namedtuple("Tile", ['x', 'y'])
 
@@ -24,13 +39,15 @@ for i in range(height):
 class Tiles:
 	def __init__(self, tiles, permutation, height, width):
 		self.tiles = tiles
-		self.permutation = permutation
+		self.permutation = np.copy(permutation)
 		self.height = height
 		self.width = width
+		self.tiles = tiles
+
 	def getPermutedTiles(self, tiles):
 		permutedTiles = np.copy(tiles)
 		for key, val in permutation.iteritems():
-			permutedTiles[:, :, :, key.x, key.y] = np.copy(self.tiles[:, :, :, val.x, val.y])
+			permutedTiles[:, :, :, key.x, key.y] = np.copy(tiles[:, :, :, val.x, val.y])
 		return permutedTiles
 	def getTileColors(self, tile):
 		tileColors = permutation[tile]
@@ -59,28 +76,41 @@ class Tiles:
 		tile2 = Tile(tile1.x, tile1.y + 1)
 		tile1Colors = self.getTileColors(tile1)
 		tile2Colors = self.getTileColors(tile2)
-		factor = np.ones(4)
-		# if (tile1.x != 0 and tile1.x != 16):
-		# 	factor[0] = 0
-		# if (tile1.y != 0 and tile1.y != 10):
-		# 	factor[0] = 0
-		# if (tile2.x != 0 and tile2.x != 16):
-		# 	factor[0] = 0
-		# if (tile2.y != 0 and tile2.y != 10):
-		# 	factor[0] = 0
-		factor[0] = 1 + np.abs(tile1.x - (self.height - 2.0) / 2.0)
-		factor[1] = 1 + np.abs(tile1.y - (self.width - 2.0) / 2.0)
-		factor[2] = 1 + np.abs(tile2.x - (self.height - 2.0) / 2.0)
-		factor[3] = 1 + np.abs(tile2.y - (self.width - 2.0) / 2.0)
-		return factor.prod() * np.sum(np.abs(tile1Colors[:,24,:] - tile2Colors[:,0,:]))
+		return np.linalg.norm(tile1Colors[:,24,:] - tile2Colors[:,0,:])**2
 	def getEnergyHMargin(self, tile1):
 		tile2 = Tile(tile1.x + 1, tile1.y)
 		tile1Colors = self.getTileColors(tile1)
 		tile2Colors = self.getTileColors(tile2)
-		factor = np.ones(4)
-		
-		return factor.prod() * np.sum(np.abs(tile1Colors[24,:,:] - tile2Colors[0,:,:]))
+		return np.linalg.norm(tile1Colors[24,:,:] - tile2Colors[0,:,:])**2
+	def cheatEnergy(self):
+		energy = 0
+		for i in range(self.height):
+			for j in range(self.width):
+				tileColors = permutation[Tile(i,j)]
+				energy += np.sum(np.abs(originalTiles[:,:,:,i,j] - self.tiles[:,:,:,tileColors.x,tileColors.y]))
+		return energy
+	def cheatDeltaEnergy(self, tile1, tile2):
+		if (tile1 == tile2):
+			return 0
+		tiles = self.tiles
+		energyBefore = 0
+		tile1Colors = permutation[tile1]
+		energyBefore += np.sum(np.abs(originalTiles[:,:,:,tile1.x,tile1.y] - tiles[:,:,:,tile1Colors.x,tile1Colors.y]))
+		tile2Colors = permutation[tile2]
+		energyBefore += np.sum(np.abs(originalTiles[:,:,:,tile2.x, tile2.y] - tiles[:,:,:,tile2Colors.x,tile2Colors.y]))
+
+		tiles.swap(tile1, tile2)
+		energyAfter = 0
+		tile1Colors = permutation[tile1]
+		energyAfter += np.sum(np.abs(originalTiles[:,:,:,tile1.x,tile1.y] - tiles[:,:,:,tile1Colors.x,tile1Colors.y]))
+		tile2Colors = permutation[tile2]
+		energyAfter += np.sum(np.abs(originalTiles[:,:,:,tile2.x, tile2.y] - tiles[:,:,:,tile2Colors.x,tile2Colors.y]))
+		tiles.swap(tile1, tile2)
+
+		return energyAfter - energyBefore
+
 	def energy(self):
+		# return self.cheatEnergy()
 		energy = 0
 		for i in range(self.height):
 			for j in range(self.width - 1):
@@ -129,6 +159,7 @@ class Tiles:
 
 		return energy / 2.0
 	def deltaEnergy(self, tile1, tile2):
+		# return self.cheatDeltaEnergy(tile1, tile2)
 		if (tile1 == tile2):
 			return 0
 		if (tile1.x > tile2.x or tile1.y > tile2.y):
@@ -167,12 +198,25 @@ class Tiles:
 		
 		return sumEnergyAfter - sumEnergyBefore
 
-	def permutationProposal(self):
+	def permutationProposalVariant1(self):
 		x1 = np.random.randint(1, self.height - 1)
 		y1 = np.random.randint(1, self.width - 1)
 		x2 = np.random.randint(1, self.height - 1)
 		y2 = np.random.randint(1, self.width - 1)
 		return [Tile(x1, y1), Tile(x2, y2)]
+	def permutationProposal(self):
+		return self.permutationProposalVariant1()
+		N = 10
+		x = np.random.randint(1, self.height - 1, N)
+		y = np.random.randint(1, self.width - 1, N)
+		energy = np.zeros(N)
+		for i in range(N):
+			energy[i] = self.getEnergyAround(Tile(x[i], y[i]))
+		ind1 = energy.argmax()
+		energy[ind1] = -1
+		ind2 = energy.argmax()
+		return [Tile(x[ind1], y[ind1]), Tile(x[ind2], y[ind2])]
+
 
 class Annealing:
 	def __init__(self, tiles):
@@ -180,19 +224,63 @@ class Annealing:
 		self.energy = tiles.energy()
 		self.bestEnergy = tiles.energy()
 		self.bestPermutation = tiles.permutation
+
+		self.loggingRate = 10**3
+
+		self.acceptedDirectly = np.array([])
+		self.acceptedEventually = np.array([])
+		self.rejected = np.array([])
+		self.acceptProbabilities = np.array([])
+
+		self.tempVals = np.array([])
+		self.energyVals = np.array([])
+
+		self.currentDirectly = 0
+		self.currentEventually = 0
+		self.currentProbability = 0
+		self.currentRejected = 0
+		self.currentTempVal = 0
+		self.currentEnergyVal = 0
+
+		self.cheatEnergy = np.array([])
+
 	def display(self):
 		self.tiles.display()
+            
+	def plotLogs(self):
+		f, axarr = plt.subplots(7)
+		axarr[0].plot(self.acceptedDirectly, 'b^')
+		axarr[0].set_title('acceptedDirectly')
+		axarr[1].plot(self.acceptedEventually, 'b^')
+		axarr[1].set_title('acceptedEventually')
+		axarr[2].plot(self.rejected, 'b^')
+		axarr[2].set_title('rejected')
+		axarr[3].plot(self.acceptProbabilities, 'b^')
+		axarr[3].set_title('acceptProbabilities')
+		axarr[4].semilogy(self.tempVals, 'b^')
+		axarr[4].set_title('tempVals')
+		axarr[5].plot(self.energyVals, 'b^')
+		axarr[5].set_title('energyVals')
+		axarr[6].plot(self.cheatEnergy, 'r^')
+		axarr[6].set_title('cheat energy')
+		plt.show()
+
 	def step(self, temperature):
 		[t1, t2] = tiles.permutationProposal()
 		delta = tiles.deltaEnergy(t1, t2)
 		if (delta <= 0):
 			self.tiles.swap(t1, t2)
 			self.energy += delta
+			self.currentDirectly += 1
 		else:
 			pAccept = np.exp(- delta / temperature)
+			self.currentProbability += pAccept
 			if (np.random.rand() <= pAccept):
 				self.tiles.swap(t1, t2)
 				self.energy += delta
+				self.currentEventually += 1
+			else:
+				self.currentRejected += 1
 
 	def annealing(self, startExp = 6, endExp = -2, numSteps = 10**6):
 		temperature = np.logspace(startExp, endExp, numSteps)
@@ -206,8 +294,25 @@ class Annealing:
 				self.bestT = tempVal
 				self.bestEnergy = self.energy
 				print('Energy = ' + str(self.bestEnergy) + ' at t = ' + str(tempVal) + ' %done = ' + str(100*index/float(temperature.size)) + '\n')
+			self.currentTempVal += tempVal
+			self.currentEnergyVal += self.energy
 			if index % 10**5 == 0:
 				print('Index = ' + str(index) + ' # sanity check (should be zero) = ' + str(self.energy - self.tiles.energy()) + ' Energy = ' + str(self.energy) + ' Temperature ' + str(tempVal))
+			if index % self.loggingRate == 0 and index > 0:
+				self.acceptProbabilities = np.append(self.acceptProbabilities, self.currentProbability/(self.currentEventually + self.currentRejected))
+				self.currentProbability = 0
+				self.acceptedDirectly = np.append(self.acceptedDirectly, self.currentDirectly)
+				self.currentDirectly = 0
+				self.acceptedEventually = np.append(self.acceptedEventually, self.currentEventually)
+				self.currentEventually = 0
+				self.rejected = np.append(self.rejected, self.currentRejected)
+				self.currentRejected = 0
+				self.tempVals = np.append(self.tempVals, self.currentTempVal / self.loggingRate)
+				self.currentTempVal = 0
+				self.energyVals = np.append(self.energyVals, self.currentEnergyVal / self.loggingRate)
+				self.currentEnergyVal = 0
+				self.cheatEnergy = np.append(self.cheatEnergy, self.tiles.cheatEnergy())
+
 
 ## Setup
 
