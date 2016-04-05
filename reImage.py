@@ -6,6 +6,9 @@ from collections import namedtuple
 import scipy.misc as misc
 from colormath.color_objects import LabColor, sRGBColor
 from colormath.color_conversions import convert_color
+from scipy.misc import toimage
+from scipy import ndimage
+import cv2
 
 shuffledImageEasy = sio.loadmat('shuffledImageEasy.mat')
 
@@ -21,13 +24,15 @@ shuffledTiles = RGBtilesShuffled.reshape(25, 25, 3, 18, 12).astype(np.float64)
 height = 18
 width = 12
 
-originalTiles = np.copy(shuffledTiles)
-originalTiles.fill(0)
 
-for i in range(0,height):
-	for j in range(0,width):
-		originalTiles[:,:,:,i,j] = original[25*i:25*(i+1),25*j:25*(j+1),:]	
+def getTiles(image):
+	tiles = np.zeros((25, 25, 3, 18, 12))
+	for i in range(0,height):
+		for j in range(0,width):
+			tiles[:,:,:,i,j] = image[25*i:25*(i+1),25*j:25*(j+1),:]
+	return tiles	
 
+originalTiles = getTiles(original)
 
 Tile = namedtuple("Tile", ['x', 'y'])
 
@@ -38,74 +43,99 @@ for i in range(height):
 
 class Tiles:
 	def __init__(self, tiles, permutation, height, width):
-		self.tiles = tiles
-		self.permutation = np.copy(permutation)
+		self.tiles = np.copy(tiles)
+		self.permutation = permutation.copy()
 		self.height = height
 		self.width = width
-		self.tiles = tiles
+		self.originalTiles = np.copy(originalTiles)
+		self.backupTiles = np.copy(self.tiles)
+		self.backupOriginalTiles = np.copy(self.originalTiles)
 
-	def getPermutedTiles(self, tiles):
-		permutedTiles = np.copy(tiles)
-		for key, val in permutation.iteritems():
-			permutedTiles[:, :, :, key.x, key.y] = np.copy(tiles[:, :, :, val.x, val.y])
+	def __rgbToLab(self, color):
+		rgbC = sRGBColor(color[0], color[1], color[2],True)
+		lab = convert_color(rgbC, LabColor)
+		return np.array([lab.lab_l, lab.lab_a, lab.lab_b])
+	def rgbToLab(self):
+		for i in range(25):
+			for j in range(25):
+				for k in range(height):
+					for m in range(width):
+						self.tiles[i,j,:,k,m] = self.__rgbToLab(self.tiles[i,j,:,k,m])
+						self.originalTiles[i,j,:,k,m] = self.__rgbToLab(self.originalTiles[i,j,:,k,m])
+
+	def labToRgb(self):
+		self.tiles = np.copy(self.backupTiles)
+		self.originalTiles = np.copy(self.backupOriginalTiles)
+
+	def getPermutedTiles(self, tilesLocal):
+		permutedTiles = np.copy(tilesLocal)
+		for key, val in self.permutation.iteritems():
+			permutedTiles[:, :, :, key.x, key.y] = np.copy(tilesLocal[:, :, :, val.x, val.y])
 		return permutedTiles
 	def getTileColors(self, tile):
-		tileColors = permutation[tile]
+		tileColors = self.permutation[tile]
 		return self.tiles[:, :, :, tileColors.x, tileColors.y];
 	def asImage(self):
 		permutedTiles = self.getPermutedTiles(self.tiles)
+		return self.tilesToImage(permutedTiles).astype(np.uint8)
+	def tilesToImage(self, tiles):
 		col = []
 		for i in range(self.height):
 			row = []
 			for j in range(self.width):
 				if row != []:
-					row = np.hstack((row, permutedTiles[:, :, :, i, j]))
+					row = np.hstack((row, tiles[:, :, :, i, j]))
 				else: 
-					row = permutedTiles[:, :, :, i, j]
+					row = tiles[:, :, :, i, j]
 			if col != []:
 				col = np.vstack((col, row))
 			else: 
 				col = row
-		return col.astype(np.uint8)
+		return col
 	def display(self):
 		plt.imshow(self.asImage())
 		plt.show()
 	def swap(self, tile1, tile2):
-		permutation[tile1], permutation[tile2] = permutation[tile2], permutation[tile1]
+		self.permutation[tile1], self.permutation[tile2] = self.permutation[tile2], self.permutation[tile1]
 	def getEnergyVMargin(self, tile1):
 		tile2 = Tile(tile1.x, tile1.y + 1)
 		tile1Colors = self.getTileColors(tile1)
 		tile2Colors = self.getTileColors(tile2)
-		return np.linalg.norm(tile1Colors[:,24,:] - tile2Colors[:,0,:])**2
+		factor = 1.0
+		# if (tile1.x == 0 or tile2.x == self.width - 1):
+		# 	factor = 2.0
+		return factor * np.linalg.norm(tile1Colors[:,24,:] - tile2Colors[:,0,:])
 	def getEnergyHMargin(self, tile1):
 		tile2 = Tile(tile1.x + 1, tile1.y)
 		tile1Colors = self.getTileColors(tile1)
 		tile2Colors = self.getTileColors(tile2)
-		return np.linalg.norm(tile1Colors[24,:,:] - tile2Colors[0,:,:])**2
+		factor = 1.0
+		# if (tile1.y == 0 or tile2.y == self.height - 1):
+		# 	factor = 2.0
+		return factor * np.linalg.norm(tile1Colors[24,:,:] - tile2Colors[0,:,:])
 	def cheatEnergy(self):
 		energy = 0
 		for i in range(self.height):
 			for j in range(self.width):
-				tileColors = permutation[Tile(i,j)]
-				energy += np.sum(np.abs(originalTiles[:,:,:,i,j] - self.tiles[:,:,:,tileColors.x,tileColors.y]))
+				tileColors = self.permutation[Tile(i,j)]
+				energy += np.sum(np.abs(self.originalTiles[:,:,:,i,j] - self.tiles[:,:,:,tileColors.x,tileColors.y]))
 		return energy
 	def cheatDeltaEnergy(self, tile1, tile2):
 		if (tile1 == tile2):
 			return 0
-		tiles = self.tiles
 		energyBefore = 0
 		tile1Colors = permutation[tile1]
-		energyBefore += np.sum(np.abs(originalTiles[:,:,:,tile1.x,tile1.y] - tiles[:,:,:,tile1Colors.x,tile1Colors.y]))
+		energyBefore += np.sum(np.abs(self.originalTiles[:,:,:,tile1.x,tile1.y] - self.tiles[:,:,:,tile1Colors.x,tile1Colors.y]))
 		tile2Colors = permutation[tile2]
-		energyBefore += np.sum(np.abs(originalTiles[:,:,:,tile2.x, tile2.y] - tiles[:,:,:,tile2Colors.x,tile2Colors.y]))
+		energyBefore += np.sum(np.abs(self.originalTiles[:,:,:,tile2.x, tile2.y] - self.tiles[:,:,:,tile2Colors.x,tile2Colors.y]))
 
-		tiles.swap(tile1, tile2)
+		self.swap(tile1, tile2)
 		energyAfter = 0
-		tile1Colors = permutation[tile1]
-		energyAfter += np.sum(np.abs(originalTiles[:,:,:,tile1.x,tile1.y] - tiles[:,:,:,tile1Colors.x,tile1Colors.y]))
-		tile2Colors = permutation[tile2]
-		energyAfter += np.sum(np.abs(originalTiles[:,:,:,tile2.x, tile2.y] - tiles[:,:,:,tile2Colors.x,tile2Colors.y]))
-		tiles.swap(tile1, tile2)
+		tile1Colors = self.permutation[tile1]
+		energyAfter += np.sum(np.abs(self.originalTiles[:,:,:,tile1.x,tile1.y] - self.tiles[:,:,:,tile1Colors.x,tile1Colors.y]))
+		tile2Colors = self.permutation[tile2]
+		energyAfter += np.sum(np.abs(self.originalTiles[:,:,:,tile2.x, tile2.y] - self.tiles[:,:,:,tile2Colors.x,tile2Colors.y]))
+		self.swap(tile1, tile2)
 
 		return energyAfter - energyBefore
 
@@ -206,16 +236,20 @@ class Tiles:
 		return [Tile(x1, y1), Tile(x2, y2)]
 	def permutationProposal(self):
 		return self.permutationProposalVariant1()
-		N = 10
+		if np.random.rand() < 0.5:
+			return self.permutationProposalVariant1()
+		x1 = np.random.randint(1, self.height - 1)
+		y1 = np.random.randint(1, self.width - 1)
+		N = np.random.randint(10, 30)
 		x = np.random.randint(1, self.height - 1, N)
 		y = np.random.randint(1, self.width - 1, N)
 		energy = np.zeros(N)
 		for i in range(N):
 			energy[i] = self.getEnergyAround(Tile(x[i], y[i]))
-		ind1 = energy.argmax()
-		energy[ind1] = -1
-		ind2 = energy.argmax()
-		return [Tile(x[ind1], y[ind1]), Tile(x[ind2], y[ind2])]
+		ind = energy.argmax()
+		x2 = x[ind];
+		y2 = y[ind];
+		return [Tile(x1, y1), Tile(x2, y2)]
 
 
 class Annealing:
@@ -246,7 +280,24 @@ class Annealing:
 
 	def display(self):
 		self.tiles.display()
-            
+
+	def step(self, temperature):
+		[t1, t2] = self.tiles.permutationProposal()
+		delta = self.tiles.deltaEnergy(t1, t2)
+		if (delta <= 0):
+			self.tiles.swap(t1, t2)
+			self.energy += delta
+			self.currentDirectly += 1
+		else:
+			pAccept = np.exp(- delta / temperature)
+			self.currentProbability += pAccept
+			if (np.random.rand() <= pAccept):
+				self.tiles.swap(t1, t2)
+				self.energy += delta
+				self.currentEventually += 1
+			else:
+				self.currentRejected += 1
+				
 	def plotLogs(self):
 		f, axarr = plt.subplots(7)
 		axarr[0].plot(self.acceptedDirectly, 'b^')
@@ -265,9 +316,8 @@ class Annealing:
 		axarr[6].set_title('cheat energy')
 		plt.show()
 
-	def step(self, temperature):
-		[t1, t2] = tiles.permutationProposal()
-		delta = tiles.deltaEnergy(t1, t2)
+		[t1, t2] = self.tiles.permutationProposal()
+		delta = self.tiles.deltaEnergy(t1, t2)
 		if (delta <= 0):
 			self.tiles.swap(t1, t2)
 			self.energy += delta
@@ -282,7 +332,8 @@ class Annealing:
 			else:
 				self.currentRejected += 1
 
-	def annealing(self, startExp = 6, endExp = -2, numSteps = 10**6):
+	def annealing(self, startExp = 5.5, endExp = 2.5, numStepsExp = 6):
+		numSteps = 10**numStepsExp
 		temperature = np.logspace(startExp, endExp, numSteps)
 		self.bestT = temperature[0]
 		for indexTuple, tempVal in np.ndenumerate(temperature):
@@ -317,6 +368,7 @@ class Annealing:
 ## Setup
 
 tiles = Tiles(shuffledTiles, permutation, height, width)
+# tiles.rgbToLab()
 anneal = Annealing(tiles)
 
 #anneal.tiles.display()
