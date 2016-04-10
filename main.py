@@ -124,7 +124,6 @@ class Proposal:
 		self.priorityRecomputeRate = priorityRecomputeRate
 		self.data = data
 		self.counter = 0
-		self.sortedTiles = []
 		self.height = self.data.height
 		self.width = self.data.width
 		self.numTiles = (self.height - 2) * (self.width - 2)
@@ -194,12 +193,12 @@ class Anneal:
 
 d = Data(shuffledImage)
 a = Anneal(d)
-a.do(start = 200, end = 5, numSteps = 1.0E+5, proposalSigma = 30)  # change numSteps to 4.0E+6 to get better results 
+a.do(start = 160, end = 25, numSteps = 4.0E+6, proposalSigma = 80)  # perfect result with t=200->5, sigma 80 and numSteps 4.0E+6 (min energy hit at about 12 degrees)
 # a.logger.logs() # show logs
 # a.data.show()  # show final image
 
-# dOriginal = Data(original)
-# aOriginal = Anneal(dOriginal)
+dOriginal = Data(original)
+aOriginal = Anneal(dOriginal)
 
 
 
