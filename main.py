@@ -1,14 +1,7 @@
 import scipy.io as sio
 import numpy as np
-import pprint as pp
 from matplotlib import pyplot as plt
-from collections import namedtuple
-import scipy.misc as misc
-from colormath.color_objects import LabColor, sRGBColor
-from colormath.color_conversions import convert_color
 from scipy.misc import toimage
-from scipy import ndimage
-import cv2
 import time
 
 
