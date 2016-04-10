@@ -141,6 +141,14 @@ class Anneal:
 		if (np.random.rand() > pAccept):                  # if not accepted swap back
 			self.data.swap(t1[0], t1[1], t2[0], t2[1])
 
+
+	# Perform simulated annealing
+	# start - start temperature
+	# end - end temperature
+	# numSteps - iteration count for annealing
+	# loggingRate - log every so many steps
+	# resetRate - if no improvement after so many steps, reset to previous best state
+	#             set to bigger than numSteps to never reset
 	def do(self, start, end, numSteps, loggingRate = 10**4, resetRate = 3*10**4):
 		startExp = np.log10(start)
 		endExp = np.log10(end)
@@ -156,10 +164,11 @@ class Anneal:
 			if (i % resetRate == 0):
 				# Reset condition
 				if (self.energy > self.bestEnergy):
-					print("WARNING: RESET to energy = " + str(self.bestEnergy) + " (consider lowering initial temperature) ")
+					print("WARNING: RESET to energy = " + str(self.bestEnergy))
 					self.energy = self.bestEnergy
 					self.data.image = np.copy(self.imageBackup)
-				else:
+			if (i % loggingRate == 0):
+				if (self.energy <= self.bestEnergy):
 					print("NEW BEST ENERGY = " + str(self.energy))
 					self.bestEnergy = self.energy
 					self.imageBackup = np.copy(self.data.image)
@@ -167,7 +176,7 @@ class Anneal:
 
 d = Data(shuffledImage)
 a = Anneal(d)
-a.do(start = 200, end = 5, numSteps = 3.86E+6) # about 15 minutes of runtime
+#a.do(start = 160, end = 5, numSteps = 4.0E+6) # about 15-20 minutes of runtime
 dOriginal = Data(original)
 aOriginal = Anneal(dOriginal)
 
