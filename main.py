@@ -9,6 +9,7 @@ from colormath.color_conversions import convert_color
 from scipy.misc import toimage
 from scipy import ndimage
 import cv2
+import time
 
 
 shuffledImageEasy = sio.loadmat('shuffledImageEasy.mat')
@@ -19,33 +20,56 @@ original = originalMat['reconstructed'].astype(np.float64)
 RGBtilesShuffled = shuffledImageEasy['RGBtilesShuffled']
 shuffledImage = shuffledImageEasy['RGBrearranged'].astype(np.float64)
 
+class Energy:
+	def __init__(self, data):
+		self.image = data.image
+		self.height = data.height
+		self.width = data.width
+
+	def getLeftRightEnergy(self, tile):
+		i, j = tile
+		x1 = 25 * i
+		x2 = 25 * (i + 1)
+		y = 25 * (j + 1) - 1
+		diff = self.image[x1:x2,y,:] - self.image[x1:x2,y + 1,:]
+		return np.sqrt((diff**2).mean())
+
+	def getUpDownEnergy(self, tile):
+		i, j = tile
+		y1 = 25 * j
+		y2 = 25 * (j + 1)
+		x = 25 * (i + 1) - 1
+		diff = self.image[x, y1:y2, :] - self.image[x + 1, y1:y2, :]
+		return np.sqrt((diff**2).mean())
+
+	def getEnergyAround(self, tile):
+		i, j = tile
+		e = np.zeros(4)
+		e[0] = self.getLeftRightEnergy((i,j-1))
+		e[1] = self.getLeftRightEnergy((i,j))
+		e[2] = self.getUpDownEnergy((i-1,j))
+		e[3] = self.getUpDownEnergy((i,j))
+		return e.sum()
+
+	def getEnergyAround2Tiles(self, t1, t2):
+		return self.getEnergyAround(t1) + self.getEnergyAround(t2)
+
+	def energy(self):
+		energy = 0
+		for i in range(1, self.height - 1):
+			for j in range(1, self.width - 1):
+				energy += self.getEnergyAround((i, j))
+		return energy
+
+	def cheatEnergy(self):
+		return np.linalg.norm(self.image - original)
+
 
 class Data:
 	def __init__(self, shuffledImage, height = 18, width = 12):
 		self.image = np.copy(shuffledImage)
 		self.height = height
 		self.width = width
-		self.energyCol = np.zeros(self.width - 1)
-		self.energyRow = np.zeros(self.height - 1)
-
-	# 0 <= j < width - 1
-	def computeEnergyCol(self, j):
-		diff = self.image[:, 25 * (j + 1) - 1, :] - self.image[:, 25 * (j + 1), :]
-		return np.linalg.norm(diff)
-		
-
-	# 0 <= i < height - 1
-	def computeEnergyRow(self, i):
-		diff = self.image[25 * (i + 1) - 1, :, :] - self.image[25 * (i + 1), :, :]
-		return np.linalg.norm(diff)
-		
-
-	def energy(self):
-		for j in range(self.width - 1):
-			self.energyCol[j] = self.computeEnergyCol(j)
-		for i in range(self.height - 1):
-			self.energyRow[i] = self.computeEnergyRow(i)
-		return self.energyRow.sum() + self.energyCol.sum()
 
 	def show(self):
 		toimage(self.image).show()
@@ -63,44 +87,76 @@ class Data:
 		y2 = np.random.randint(1, self.width - 1)
 		return [(x1, y1), (x2, y2)]
 
+class Logger:
+	def __init__(self, data, loggingRate):
+		self.data = data
+		self.rate = loggingRate
+		self.pAcceptArr = np.array([])
+		self.energyArr = np.array([])
+		self.cheatEnergyArr = np.array([])
+		self.pAcceptCurr =  0
+		self.counter = 0
+	def update(self, energy = 0, pAccept = 0):
+		if energy > 0:
+			self.energyArr = np.append(self.energyArr, energy)
+			self.cheatEnergyArr = np.append(self.energyArr, Energy(self.data).cheatEnergy())
+		if pAccept > 0:
+			self.pAcceptCurr += pAccept
+			self.counter += 1
+			if (self.counter >= self.rate):
+				self.pAcceptArr = np.append(self.pAcceptArr, pAccept / self.rate)
+				self.pAcceptCurr = 0
+				self.counter = 0
+	def logs(self):
+		f, axarr = plt.subplots(3)
+		axarr[0].plot(self.pAcceptArr, 'b^')
+		axarr[0].set_title('pAcceptArr')
+		axarr[1].plot(self.energyArr, 'b^')
+		axarr[1].set_title('energyArr')
+		axarr[2].plot(self.cheatEnergyArr, 'r^')
+		axarr[2].set_title('cheatEnergyArr')
+		plt.show()
+
+
 class Anneal:
 	def __init__(self, data):
 		self.data = data
-		self.energy = data.energy()
+		self.energy = Energy(data).energy()
 		self.bestEnergy = self.energy
+		self.logger = Logger(data, 10**4)
 
 	def step(self, temperature):
 		prop = self.data.proposal()
-		x1, y1 = prop[0]
-		x2, y2 = prop[1]
-		self.data.swap(x1, y1, x2, y2)
-		newEnergy = self.data.energy()
-		delta = newEnergy - self.energy
-		if delta <= 0:
-			self.energy = newEnergy
-		else:
+		t1 = prop[0]
+		t2  = prop[1]
+		oldEnergy = Energy(self.data).getEnergyAround2Tiles(t1, t2)
+		self.data.swap(t1[0], t1[1], t2[0], t2[1])
+		newEnergy = Energy(self.data).getEnergyAround2Tiles(t1, t2)
+		delta = newEnergy - oldEnergy
+		pAccept = 1.0
+		if (delta > 0):
 			pAccept = np.exp(- delta / temperature)
-			if (np.random.rand() <= pAccept):
-				self.energy = newEnergy
-			else:
-				self.data.swap(x1, y1, x2, y2)
-
+		self.logger.update(pAccept = pAccept)
+		if (np.random.rand() > pAccept):                  # if not accepted swap back
+			self.data.swap(t1[0], t1[1], t2[0], t2[1])
 
 	def do(self, startExp, endExp, numStepsExp):
 		numSteps = 10**numStepsExp
 		tempArray = np.logspace(startExp, endExp, numSteps)
 		i = 0
 		for temperature in np.nditer(tempArray):
-			if (self.energy < self.bestEnergy):
-				self.bestEnergy = self.energy
-				print("E=" + str(self.energy) + " at t=" + str(temperature))
 			self.step(temperature)
 			i += 1
+			if (i % 10**4 == 0):
+				self.energy = Energy(self.data).energy()
+				print("E=" + str(self.energy) + " at temperature = " + str(temperature) + " time.clock() = " + str(time.clock()))
+				self.logger.update(energy = self.energy)
+
 
 d = Data(shuffledImage)
 a = Anneal(d)
-a.do(startExp = 3, endExp = 0, numStepsExp = 5) # I tried all kinds of cooling schemes (while also logging all possible params) 
-a.data.show()
+#a.do(startExp = 3, endExp = 0, numStepsExp = 5) 
+#a.data.show()
 dOriginal = Data(original)
 aOriginal = Anneal(dOriginal)
 
